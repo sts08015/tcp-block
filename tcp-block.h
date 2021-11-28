@@ -125,6 +125,11 @@ void chkAndBlock(pcap_t* handle,char* dev,const u_char* packet,char* pat)
     pkt1.tcpHdr.seq = tcpHdr->ack;
     pkt1.tcpHdr.ack = pkt2.tcpHdr.seq = htonl(ntohl(tcpHdr->seq)+pay_len);
 
+    pkt1.ipHdr.checksum = 0xffff;
+    pkt2.ipHdr.checksum = 0xffff;
+    pkt1.tcpHdr.checksum = 0xffff;
+    pkt2.tcpHdr.checksum = 0xffff;
+    
     if(mode) pcap_sendpacket(handle, reinterpret_cast<const u_char *>(&pkt1), sizeof(pkt1));
     else pcap_sendpacket(handle, reinterpret_cast<const u_char *>(&pkt1), sizeof(pkt2));
     pcap_sendpacket(handle, reinterpret_cast<const u_char *>(&pkt2), sizeof(pkt2));
