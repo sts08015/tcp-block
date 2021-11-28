@@ -1,6 +1,8 @@
 #include <iostream>
 #include <cstdio>
-#include <cstring>
+#include <cstdlib>
+#include <unistd.h>
+#include <fcntl.h>
 #include <pcap.h>
 #include <algorithm>
 #include "networks.h"
@@ -9,6 +11,7 @@
 #define TCP 6
 #define HTTP_PORT 80
 #define HTTPS_PORT 443
+#define MAC_LEN 17
 
 using std::cout;
 using std::endl;
@@ -20,22 +23,59 @@ void usage()
     puts("syntax : tcp-block <interface> <pattern>\nsample : sudo tcp-block wlan0 \"Host: test.gilgil.net\"");
 }
 
-void chkAndBlock(pcap_t* handle,const u_char* packet,char* pat)
+Mac getMac(char* dev)
 {
-    PEthHdr ethhdr = (PEthHdr)packet;
-    if(ethhdr->type()!=EthHdr::Ip4) return;
+    char buf[MAC_LEN + 1] = {0};
 
-    PIpHdr iphdr = (PIpHdr)(packet+ETH_LEN);
-    if(iphdr->protocol!=TCP) return;
+    int len = strlen(dev);
+    int sz = len + 24; //NULL considered
+    char *path = (char *)malloc(sz);
+    if (path == NULL)
+    {
+        perror("path malloc failed");
+        exit(-1);
+    }
+
+    snprintf(path, sz, "%s%s%s", "/sys/class/net/", dev, "/address");
+    int fd = open(path, O_RDONLY);
+    if (fd == -1)
+    {
+        perror("open failed");
+        exit(-1);
+    }
+
+    int bytes = read(fd, buf, MAC_LEN);
+    if (bytes != MAC_LEN)
+    {
+        fprintf(stderr, "mac addr read failed");
+        free(path);
+        close(fd);
+        exit(-1);
+    }
+
+    free(path);
+    close(fd);
+    return Mac(buf);
+}
+
+void chkAndBlock(pcap_t* handle,char* dev,const u_char* packet,char* pat)
+{
+    PEthHdr ethHdr = (PEthHdr)packet;
+    if(ethHdr->type()!=EthHdr::Ip4) return;
+
+    PIpHdr ipHdr = (PIpHdr)(packet+ETH_LEN);
+    if(ipHdr->protocol!=TCP) return;
     
-    uint16_t iphdr_len = ((iphdr->h_v)&0xf)<<2;
+    uint16_t iphdr_len = ((ipHdr->h_v)&0xf)<<2;
 
-    PTcpHdr tcpHdr = (PTcpHdr)((u_char*)iphdr+iphdr_len);
+    PTcpHdr tcpHdr = (PTcpHdr)((u_char*)ipHdr+iphdr_len);
     uint16_t dport = tcpHdr->dport();
-    
+    bool mode;
     if(dport!=HTTP_PORT && dport!=HTTPS_PORT) return;
+    else if(dport == HTTP_PORT) mode = true;
+    else mode = false;
 
-    uint16_t t_len = iphdr->tlen();
+    uint16_t t_len = ipHdr->tlen();
     uint16_t tcphdr_len = (tcpHdr->offset)<<2;
 
     uint32_t pay_len = t_len - (tcphdr_len+iphdr_len);
@@ -47,10 +87,37 @@ void chkAndBlock(pcap_t* handle,const u_char* packet,char* pat)
     auto it = search(payload.begin(),payload.end(),std::boyer_moore_searcher(target.begin(),target.end()));
     if(it == payload.end()) return;  //not found 
 
-    Mac srcMac = ethhdr->smac();
-    Mac dstMac = ethhdr->dmac();
-    Ip srcIp = iphdr->sip();
-    Ip dstIp = iphdr->dip();
+    Mac myMac = getMac(dev);
+    
+    HTTP_block_pkt pkt1;    //backward
+    HTTP_block_pkt pkt2;    //forward
+
+    pkt1.ethHdr = pkt2.ethHdr = *ethHdr;
+    pkt1.ipHdr = pkt2.ipHdr = *ipHdr;
+    pkt1.tcpHdr = pkt2.tcpHdr = *tcpHdr;
+        
+    pkt1.ethHdr.smac_ = pkt2.ethHdr.smac_ = myMac;
+
+    pkt1.ipHdr.dst = ipHdr->src;
+    pkt1.ipHdr.src = ipHdr->dst;
+    pkt1.ipHdr.ttl = pkt2.ipHdr.ttl = 0x80;  //1byte
+
+    pkt1.tcpHdr.dst_port = tcpHdr->src_port;
+    pkt1.tcpHdr.src_port = tcpHdr->dst_port;
+
+    pkt2.tcpHdr.flags = 0x4;      //RST
+    
+    if(mode)
+    {
+        pkt1.tcpHdr.flags = 0x1;    //FIN
+        
+        
+        //change iphdr's tlen!!
+    }
+    else
+    {
+        pkt1.tcpHdr.flags = 0x4;    //RST
+    }
 }
 
 int watch(char* dev, char* pat)
@@ -73,7 +140,7 @@ int watch(char* dev, char* pat)
             cout << "pcap_next_ex return "<<res<<'('<<pcap_geterr(handle)<<')'<<endl;
             break;
         }
-        chkAndBlock(handle,packet,pat);
+        chkAndBlock(handle,dev,packet,pat);
     }
 
     pcap_close(handle);

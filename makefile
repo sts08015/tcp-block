@@ -1,9 +1,13 @@
+CC = g++
+CXXFLAGS = -std=c++17
+LDLIBS = -lpcap
+
 all: tcp-block
 
-tcp-block:
-	g++ -std=c++17 -o tcp-block tcp-block.cpp -lpcap
+tcp-block: tcp-block.o ethhdr.o ip.o mac.o
+	$(CC) $^ $(CXXFLAGS) $(LDLIBS) -o $@
 
 clean:
-	rm -f tcp-block
+	@rm -f *.o tcp-block
 
 remake: clean all
