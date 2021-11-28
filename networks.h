@@ -2,8 +2,12 @@
 #include "iphdr.h"
 #include "tcphdr.h"
 
-typedef enum
+#pragma pack(push, 1)
+typedef struct
 {
-    http,https,none
-}KINDS;
+    EthHdr ethHdr;
+    IpHdr ipHdr;
+    TcpHdr tcpHdr;
+}Block_pkt;
+#pragma pack(pop)
 
