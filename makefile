@@ -4,7 +4,7 @@ LDLIBS = -lpcap
 
 all: tcp-block
 
-tcp-block: tcp-block.o ethhdr.o ip.o mac.o
+tcp-block: ethhdr.o ip.o mac.o tcp-block.o
 	$(CC) $^ $(CXXFLAGS) $(LDLIBS) -o $@
 
 clean:

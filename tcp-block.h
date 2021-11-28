@@ -13,6 +13,10 @@
 #define HTTPS_PORT 443
 #define MAC_LEN 17
 
+#define FIN 1
+#define RST 4
+#define ACK 16
+
 using std::cout;
 using std::endl;
 using std::search;
@@ -58,6 +62,11 @@ Mac getMac(char* dev)
     return Mac(buf);
 }
 
+uint16_t calc_checksum()
+{
+
+}
+
 void chkAndBlock(pcap_t* handle,char* dev,const u_char* packet,char* pat)
 {
     PEthHdr ethHdr = (PEthHdr)packet;
@@ -88,9 +97,8 @@ void chkAndBlock(pcap_t* handle,char* dev,const u_char* packet,char* pat)
     if(it == payload.end()) return;  //not found 
 
     Mac myMac = getMac(dev);
-    
-    HTTP_block_pkt pkt1;    //backward
-    HTTP_block_pkt pkt2;    //forward
+    Block_pkt_1 pkt1;    //backward
+    Block_pkt_2 pkt2;    //forward
 
     pkt1.ethHdr = pkt2.ethHdr = *ethHdr;
     pkt1.ipHdr = pkt2.ipHdr = *ipHdr;
@@ -100,24 +108,27 @@ void chkAndBlock(pcap_t* handle,char* dev,const u_char* packet,char* pat)
 
     pkt1.ipHdr.dst = ipHdr->src;
     pkt1.ipHdr.src = ipHdr->dst;
-    pkt1.ipHdr.ttl = pkt2.ipHdr.ttl = 0x80;  //1byte
+    pkt1.ipHdr.ttl = pkt2.ipHdr.ttl = 0x80;  //ttl 1byte
+
+    uint16_t tmp = sizeof(struct IpHdr) + sizeof(struct TcpHdr);
+    if(mode) pkt1.ipHdr.t_len = htons(tmp + 58);
+    else pkt1.ipHdr.t_len = htons(tmp);
+    pkt2.ipHdr.t_len = htons(tmp);
 
     pkt1.tcpHdr.dst_port = tcpHdr->src_port;
     pkt1.tcpHdr.src_port = tcpHdr->dst_port;
 
-    pkt2.tcpHdr.flags = 0x4;      //RST
-    
-    if(mode)
-    {
-        pkt1.tcpHdr.flags = 0x1;    //FIN
-        
-        
-        //change iphdr's tlen!!
-    }
-    else
-    {
-        pkt1.tcpHdr.flags = 0x4;    //RST
-    }
+    pkt2.tcpHdr.flags = (RST|ACK);
+    if(mode) pkt1.tcpHdr.flags = (FIN|ACK);
+    else pkt1.tcpHdr.flags = (RST|ACK);
+
+    pkt1.tcpHdr.seq = tcpHdr->ack;
+    pkt1.tcpHdr.ack = pkt2.tcpHdr.seq = htonl(ntohl(tcpHdr->seq)+pay_len);
+
+    if(mode) pcap_sendpacket(handle, reinterpret_cast<const u_char *>(&pkt1), sizeof(pkt1));
+    else pcap_sendpacket(handle, reinterpret_cast<const u_char *>(&pkt1), sizeof(pkt2));
+    pcap_sendpacket(handle, reinterpret_cast<const u_char *>(&pkt2), sizeof(pkt2));
+    puts("send!!!");
 }
 
 int watch(char* dev, char* pat)
