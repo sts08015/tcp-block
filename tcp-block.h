@@ -62,9 +62,32 @@ Mac getMac(char* dev)
     return Mac(buf);
 }
 
-uint16_t calc_checksum()
+uint16_t calc_checksum(void* pkt,int size)
 {
+    unsigned int checksum = 0;
+    uint16_t* buf = (uint16_t*)pkt;
+    
+    while(size>1)
+    {
+        checksum += *buf;
+        buf++;
+        size -= sizeof(uint16_t);
+    }
+    if(size) checksum += *(uint16_t*)buf;
+    checksum = (checksum>>16) + (checksum&0xffff);
+    checksum += (checksum>>16);
+    return ~checksum;
+}
 
+uint16_t calc_tcp_checksum(void* pkt, void* pseudo_pkt)
+{
+    uint16_t tmp = ~calc_checksum(pseudo_pkt,sizeof(Pseudo_hdr));
+    uint16_t pkt_size = ntohs(((Pseudo_hdr*)pseudo_pkt)->len);
+    uint16_t tmp2 = ~calc_checksum(pkt,pkt_size);
+    uint32_t checksum = tmp + tmp2;
+    checksum = (checksum>>16) + (checksum&0xffff);
+    checksum += (checksum>>16);
+    return ~checksum;
 }
 
 void chkAndBlock(pcap_t* handle,char* dev,const u_char* packet,char* pat)
@@ -110,10 +133,12 @@ void chkAndBlock(pcap_t* handle,char* dev,const u_char* packet,char* pat)
     pkt1.ipHdr.src = ipHdr->dst;
     pkt1.ipHdr.ttl = pkt2.ipHdr.ttl = 0x80;  //ttl 1byte
 
-    uint16_t tmp = sizeof(struct IpHdr) + sizeof(struct TcpHdr);
-    if(mode) pkt1.ipHdr.t_len = htons(tmp + 58);
+    uint16_t tmp = sizeof(IpHdr) + sizeof(TcpHdr);
+    if(mode) pkt1.ipHdr.t_len = htons(tmp + 56);
     else pkt1.ipHdr.t_len = htons(tmp);
     pkt2.ipHdr.t_len = htons(tmp);
+    
+    pkt1.tcpHdr.offset = pkt2.tcpHdr.offset = (sizeof(TcpHdr)>>2);  //remove optional field
 
     pkt1.tcpHdr.dst_port = tcpHdr->src_port;
     pkt1.tcpHdr.src_port = tcpHdr->dst_port;
@@ -125,10 +150,26 @@ void chkAndBlock(pcap_t* handle,char* dev,const u_char* packet,char* pat)
     pkt1.tcpHdr.seq = tcpHdr->ack;
     pkt1.tcpHdr.ack = pkt2.tcpHdr.seq = htonl(ntohl(tcpHdr->seq)+pay_len);
 
-    pkt1.ipHdr.checksum = 0xffff;
-    pkt2.ipHdr.checksum = 0xffff;
-    pkt1.tcpHdr.checksum = 0xffff;
-    pkt2.tcpHdr.checksum = 0xffff;
+    pkt1.ipHdr.checksum = pkt1.tcpHdr.checksum = 0;
+    pkt2.ipHdr.checksum = pkt2.tcpHdr.checksum = 0;
+
+    pkt1.ipHdr.checksum = calc_checksum(&(pkt1.ipHdr),sizeof(IpHdr));
+    pkt2.ipHdr.checksum = calc_checksum(&(pkt2.ipHdr),sizeof(IpHdr));
+
+    Pseudo_hdr pseudo_pkt1;
+    Pseudo_hdr pseudo_pkt2;
+    pseudo_pkt1.dst = pkt1.ipHdr.dst;
+    pseudo_pkt2.dst = pkt2.ipHdr.dst;
+    pseudo_pkt1.src = pkt1.ipHdr.src;
+    pseudo_pkt2.src = pkt2.ipHdr.src;
+    pseudo_pkt1.reserved = pseudo_pkt2.reserved = 0;
+    pseudo_pkt1.protocol = pseudo_pkt2.protocol = TCP;
+    
+    pseudo_pkt2.len = htons(sizeof(TcpHdr));
+    pkt2.tcpHdr.checksum = calc_tcp_checksum(&(pkt2.tcpHdr),&(pseudo_pkt2));
+    if(mode) pseudo_pkt1.len = htons(56 + sizeof(TcpHdr));
+    else pseudo_pkt1.len = htons(sizeof(TcpHdr));
+    pkt1.tcpHdr.checksum = calc_tcp_checksum(&(pkt1.tcpHdr),&(pseudo_pkt1));
     
     if(mode) pcap_sendpacket(handle, reinterpret_cast<const u_char *>(&pkt1), sizeof(pkt1));
     else pcap_sendpacket(handle, reinterpret_cast<const u_char *>(&pkt1), sizeof(pkt2));
