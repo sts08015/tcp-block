@@ -174,7 +174,6 @@ void chkAndBlock(pcap_t* handle,char* dev,const u_char* packet,char* pat)
     if(mode) pcap_sendpacket(handle, reinterpret_cast<const u_char *>(&pkt1), sizeof(pkt1));
     else pcap_sendpacket(handle, reinterpret_cast<const u_char *>(&pkt1), sizeof(pkt2));
     pcap_sendpacket(handle, reinterpret_cast<const u_char *>(&pkt2), sizeof(pkt2));
-    puts("send!!!");
 }
 
 int watch(char* dev, char* pat)
